@@ -121,8 +121,14 @@ int main(void)
 {
     int err;
     int8_t rssi = 0;
+    int16_t rssi_avg = 0;
 	default_conn = NULL;
-	printk("Starting RSSI Test Demo.\n");
+    int8_t sample[6] = { 0 };
+    const int nreadings = sizeof(sample);
+    const k_timeout_t rssi_sample_interval = K_MSEC(50); /* Adjust based on experimental results. */
+    const k_timeout_t rssi_burst_interval = K_SECONDS(1);  /* Adjust based on power requirements. */
+
+	printk("Starting RSSI Test Demo (%d).\n", nreadings);
 
 	/* Initialize the Bluetooth Subsystem. */
 	err = bt_enable(bt_ready);
@@ -134,10 +140,40 @@ int main(void)
     for (;;)
     {
         if (ble_connected) {
-            read_conn_rssi(default_conn_handle, &rssi);
-            printk("Connected, RSSI = %d dBm.\n", rssi);
+
+            /* A single raw reading for the RSSI is often inaccurate. We can try
+               to address this by reading in bursts (ie taking a sample of N
+               readings) and then applying statistical treatment to the sample.
+               Here that treatment is just an arithmetic mean.   
+            */
+            rssi_avg = 0;
+            for (int i = 0; i < nreadings; i++) {
+                read_conn_rssi(default_conn_handle, &rssi);
+                sample[i] = rssi; /* Save individual readings for display later. */
+                rssi_avg += rssi;
+
+                /* We need to introduce a little bit of delay here to allow for the
+                   RSSI query to return a value that is (even if slightly)
+                   "different" from the last measured value. If we sample
+                   in quick succession without any delay what ends up happening is
+                   the same value is returned on every query meaning their average
+                   is also the same and it does not have the effect of smoothing
+                   out erroneous values - defeating the purpose of wanting to
+                   take an average (or applying any other statistical method to
+                   the data) in the first place! */
+                k_sleep(rssi_sample_interval);
+            }
+            rssi_avg /= nreadings;
+            printk("Connected, RSSI (avg) = %d dBm ", rssi);
+
+            /* Display the readings obtained in the burst. */
+            printk("[");
+            for (int i = 0; i < nreadings; i++) {
+                printk("%d ", sample[i]);
+            }
+            printk("]\n");
         }
-        k_sleep(K_SECONDS(1));
+        k_sleep(rssi_burst_interval);
     }
 
     return 0;
